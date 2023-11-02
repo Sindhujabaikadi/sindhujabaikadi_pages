@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE-edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="./libs/d3.js"></script>
+    <script src="libs/d3jstopojson.v1.js"></script>
+    <title>MA Maps</title>
+    <style>
+        /* Center the page content */
+        body {
+            text-align: center;
+        }
+
+        /* Add styles for the title and name */
+        h1 {
+            font-size: 24px;
+        }
+
+        h3 {
+            font-size: 18px;
+        }
+
+        .tooltip {
+            position: absolute;
+            opacity: 0;
+            width: auto;
+            padding: 10px;
+            background: white;
+            font-family: sans-serif;
+            font-size: medium;
+            border: 1px solid #ccc;
+            border-radius: 2px;
+        }
+
+        path {
+            stroke-width: .5px;
+            stroke: black;
+        }
+
+        path:hover {
+            opacity: .6;
+            stroke: black;
+            stroke-width: 4px;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .title {
+            font-size: 20px;
+            font-weight: bold;
+        }
+        .map-container {
+            margin: 10px;
+            display: inline-block; /* Display items in a row */
+            margin: 10px; /* Add margin between map containers */
+            vertical-align: top; /* Align to the top */
+            width: 45%; /* Specify a width for each container */
+            min-width: 300px; /* Minimum width for small screens */
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Title (H1) and Name (H3) -->
+    <h1>DATA VISUALIZATION ASSIGNMENT 2</h1>
+    <h3>SINDHUJA BAIKADI</h3>
+    <div class="container">
+        <div class="map-container">
+            <div class="title">Population in 1980</div>
+            <div class="tooltip" id="tooltip1"></div>
+            <div class="fig1"></div>
+        </div>
+        <br>
+        <div>
+            <div class="map-container"></div>
+            <div class="title">Population change between 2010 and 2000 in each town</div>
+            <div class="tooltip" id="tooltip2"></div>
+            <div class="fig2"></div>
+        </div>
+        <br>
+        <div>
+            <div class="map-container"></div>
+            <div class="title">Color Counties by Gini-index 2017</div>
+            <div class="tooltip" id="tooltip3"></div>
+            <div class="fig3"></div>
+        </div>
+    </div>
+
+    <script>
+        /*------------------- Window setting --------------------*/
+        const window_dims = {
+            width: window.innerWidth,
+            height: window.innerHeight
+        };
+
+        const svgWidth = window_dims.width / 2;
+        const svgHeight = window_dims.width / 3;
+
+        /*-----------------parallel load data--------------------*/
+        const MA_counties = "./data/towns.topojson";
+        const gini_index = "./data/gini_index.csv";
+
+        // Load data for all maps
+        Promise.all([
+            d3.json(MA_counties),
+            d3.csv(gini_index)
+        ]).then(data => {
+            const topology_data = data[0];
+            const csv_data = data[1];
+
+            // Generate all maps
+            generateMap(topology_data, ".fig1", svgWidth, svgHeight, 'POP1980', csv_data);
+            generateMap(topology_data, ".fig2", svgWidth, svgHeight, 'POPCH00_10', csv_data);
+            generateMap(topology_data, ".fig3", svgWidth, svgHeight, 'FIPS_STCO', csv_data);
+        });
+
+        function generateMap(topo_data, containerName, width, height, propertyKey, additionalData = null, margin = 30) {
+            const svg = d3.select(containerName).append("svg")
+                .attr("width", width)
+                .attr("height", height);
+
+            const geojson = topojson.feature(topo_data, topo_data.objects.ma);
+
+            const geoPath_generator = d3.geoPath()
+                .projection(d3.geoMercator().fitSize([width - margin, height - margin], geojson));
+
+            const filteredData = additionalData.filter(item => item.year === "2017");
+            filteredData.forEach(item => {
+                item.geo_id = Number(item.id.slice(-5));
+            });
+            let colorScale;
+            if (propertyKey === 'POP1980' || propertyKey === 'POPCH00_10') {
+                const minMax = d3.extent(geojson.features, (d) => {
+                    if (propertyKey === 'POP1980') {
+                        return d['properties']['POP1980'];
+                    } else if (propertyKey === 'POPCH00_10') {
+                        return d['properties']['POPCH00_10'];
+                    }
+                });
+                colorScale = d3.scaleLinear()
+                    .domain(minMax)
+                    .range([0, 1]);
+            } else if (propertyKey === 'FIPS_STCO') {
+        colorScale = d3.scaleLinear()
+            .domain(filteredData.map(d => d['Estimate!!Gini Index']))
+            .range(d3.schemeCategory10); // You can change the color scheme as needed
+    }
+
+            svg.selectAll("path")
+                .data(geojson.features)
+                .enter()
+                .append("path")
+                .attr("d", d => geoPath_generator(d))
+                .attr("fill", d => {
+                    if (propertyKey === 'FIPS_STCO') {
+                        x = filteredData.find(item => item.geo_id === d.properties.FIPS_STCO);
+                        return colorScale(x['Estimate!!Gini Index']);
+                    } else {
+                        return d3.interpolateRgbBasis(['#fc8d59', '#fee090', '#e0f3f8', '#91bfdb', '#4575b4'].reverse())(colorScale(d.properties[propertyKey]));
+                    }
+                })
+                .on("mouseenter", (event, d) => {
+                    const label = additionalData ? findLabel(d, filteredData, propertyKey) : d.properties.TOWN;
+                    showTooltip(0, event.pageX, event.pageY, label);
+                })
+                .on("mousemove", event => {
+                })
+                .on("mouseout", () => {
+                    hideTooltips();
+                });
+
+                function findLabel(d, data, propertyKey) {
+    if (containerName === ".fig1") {
+        return d.properties.TOWN;
+    } else if (propertyKey === 'FIPS_STCO') {
+        return `${data.find(item => item.geo_id === d.properties.FIPS_STCO)['Geographic Area Name'] || 'Unknown County'} (Gini index: ${data.find(item => item.geo_id === d.properties.FIPS_STCO)['Estimate!!Gini Index']})`;
+    } else {
+        return `${d.properties.TOWN} Population change: ${d.properties.POPCH00_10}`;
+    }
+}
+
+        }
+
+        const tooltips = document.querySelectorAll(".tooltip");
+        function showTooltip(index, x, y, label) {
+            tooltips[index].style.opacity = 0.9;
+            tooltips[index].style.left = x + "px";
+            tooltips[index].style.top = y + "px";
+            tooltips[index].textContent = label;
+        }
+
+        function hideTooltips() {
+            tooltips.forEach(tooltip => (tooltip.style.opacity = 0));
+        }
+    </script>
+</body>
+
+</html>
+
+
